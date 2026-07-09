@@ -1,0 +1,1009 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Odeko Notification Center</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body { font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; background: #FFFDE7; }
+    /* Scrollbar styling */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #E8D96A; border-radius: 3px; }
+    /* Iframe embed helper — removes body margin when embedded */
+    @media (max-width: 600px) { body { font-size: 14px; } }
+    @keyframes steam1 {
+      0%   { transform: translateY(0) scaleX(1);   opacity: 0.7; }
+      50%  { transform: translateY(-18px) scaleX(1.3); opacity: 0.4; }
+      100% { transform: translateY(-34px) scaleX(0.8); opacity: 0; }
+    }
+    @keyframes steam2 {
+      0%   { transform: translateY(0) scaleX(1);   opacity: 0.6; }
+      50%  { transform: translateY(-22px) scaleX(0.8); opacity: 0.3; }
+      100% { transform: translateY(-40px) scaleX(1.2); opacity: 0; }
+    }
+    @keyframes steam3 {
+      0%   { transform: translateY(0) scaleX(1);   opacity: 0.7; }
+      50%  { transform: translateY(-16px) scaleX(1.1); opacity: 0.35; }
+      100% { transform: translateY(-30px) scaleX(0.9); opacity: 0; }
+    }
+    .steam1 { animation: steam1 2.2s ease-in-out infinite; }
+    .steam2 { animation: steam2 2.8s ease-in-out infinite 0.4s; }
+    .steam3 { animation: steam3 2.5s ease-in-out infinite 0.9s; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useRef, useEffect } = React;
+
+    // -------------------------------------------------------------------------
+    // CONFIGURATION
+    // In production: pull SHOP_NAME from the parent portal via postMessage or
+    // a query-string param (?shop=Kona+Coffee), and proxy the chat API server-side.
+    // -------------------------------------------------------------------------
+    const params         = new URLSearchParams(window.location.search);
+    const SHOP_NAME      = params.get("shop")     || "Kona Coffee";
+    const ADMIN_PASSWORD = params.get("adminPass") || "oatmilk";   // override via ?adminPass=
+    const STORAGE_KEY    = "odeko-notifications";
+    const ARCHIVE_KEY    = "odeko-archived-ids";
+    const ADMIN_KEY      = "odeko-admin-unlock-ts";
+    const ADMIN_TTL_MS   = 60 * 60 * 1000; // 1 hour
+
+    // -------------------------------------------------------------------------
+    // BRAND TOKENS
+    // -------------------------------------------------------------------------
+    const C = {
+      gold:      "#FFD100",
+      goldDark:  "#C9A600",
+      ecru:      "#FFFFDF",
+      ecruDark:  "#FFFFC4",
+      mocha:     "#40180B",
+      mochaMid:  "#6B3828",
+      gray:      "#7A6055",
+      border:    "#E8D96A",
+      white:     "#FFFFFF",
+      red:       "#D93025",
+      green:     "#2E7D32",
+      // aliases
+      yellow:    "#FFD100",
+      yellowDark:"#C9A600",
+      cream:     "#FFFFDF",
+      creamDark: "#FFFFC4",
+      black:     "#40180B",
+      dark:      "#6B3828",
+    };
+
+    // -------------------------------------------------------------------------
+    // CONTENT TYPES
+    // -------------------------------------------------------------------------
+    const FULFILLMENT_CENTERS = [
+      "ALT1","AUS1","BLI1","BNA1","BOS1","CLT1","DCA1","DEN1","DFW1",
+      "EWR1","HOU1","LAX1","MDT1","MIA1","PDX1","PWM1","SEA1","SMF1",
+    ];
+
+    const CONTENT_TYPES = [
+      { value: "company", label: "Company Update", badge: "Company Update" },
+      { value: "product", label: "Product Update", badge: "Product Update" },
+      { value: "recipe",  label: "New Recipe",     badge: "New Recipe"     },
+    ];
+
+    const BADGE_STYLES = {
+      company: { bg: C.mocha, text: C.gold,  border: "none" },           // Gold on Mocha ✅
+      product: { bg: C.gold,  text: C.mocha, border: "none" },           // Mocha on Gold ✅
+      recipe:  { bg: C.white, text: C.mocha, border: `1.5px solid ${C.goldDark}` }, // Mocha on White ✅
+    };
+
+    const FILTER_TABS = [
+      { key: "all",      label: "New"      },
+      { key: "archived", label: "Archived" },
+    ];
+
+    // -------------------------------------------------------------------------
+    // SEED DATA
+    // -------------------------------------------------------------------------
+    const SEED_ARTICLES = [
+      {
+        id: 1, type: "company", badge: "Company Update",
+        title: "Odeko expands to the Pacific Northwest!",
+        date: "May 8, 2026",
+        preview: "We're thrilled to announce same-day delivery is now available in Seattle, Portland, and Tacoma. Hundreds of new SKUs added to your catalog.",
+        unread: true, ctaLabel: "", ctaUrl: "",
+      },
+      {
+        id: 2, type: "product", badge: "Product Update",
+        title: "New: Oat milk from Oatly now available",
+        date: "May 6, 2026",
+        preview: "Oatly Barista Edition is now in stock in all regions. Add it to your next order — quantities are limited for launch week.",
+        unread: true, ctaLabel: "Shop Now", ctaUrl: "https://odeko.com",
+      },
+      {
+        id: 3, type: "recipe", badge: "New Recipe",
+        title: "Lavender Honey Latte — perfect for spring",
+        date: "May 4, 2026",
+        preview: "Our in-house barista team created this seasonal recipe using our new lavender syrup. Download the recipe card below.",
+        unread: false, ctaLabel: "", ctaUrl: "",
+      },
+      {
+        id: 4, type: "company", badge: "Company Update",
+        title: "Meet your new account manager",
+        date: "Apr 29, 2026",
+        preview: "You now have a dedicated account manager, Jamie Torres, available Mon–Fri.",
+        unread: false, ctaLabel: "", ctaUrl: "",
+      },
+      {
+        id: 5, type: "product", badge: "Product Update",
+        title: "Price drop on 12oz compostable cups",
+        date: "Apr 24, 2026",
+        preview: "Compostable 12oz cups are now 18% cheaper — savings applied automatically.",
+        unread: false, ctaLabel: "", ctaUrl: "",
+      },
+      {
+        id: 6, type: "recipe", badge: "New Recipe",
+        title: "Iced Brown Sugar Espresso Tonic",
+        date: "Apr 18, 2026",
+        preview: "A crowd-pleaser for summer menus. Simple 3-ingredient recipe using Odeko brown sugar syrup and sparkling water.",
+        unread: false, ctaLabel: "", ctaUrl: "",
+      },
+    ];
+
+    // -------------------------------------------------------------------------
+    // HELPERS
+    // -------------------------------------------------------------------------
+    const formatDate = (d) =>
+      d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+    const emptyForm = () => ({
+      type: "company", title: "", preview: "",
+      date: formatDate(new Date()), unread: true,
+      ctaLabel: "", ctaUrl: "",
+      fulfillmentCenters: [],
+      imageUrl: "",
+    });
+
+    // -------------------------------------------------------------------------
+    // STORAGE  (localStorage — swap for your real API)
+    // -------------------------------------------------------------------------
+    function loadArticles() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch {}
+      return null;
+    }
+
+    function saveArticles(articles) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(articles)); } catch {}
+    }
+
+    function loadArchivedIds() {
+      try {
+        const raw = localStorage.getItem(ARCHIVE_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch {}
+      return [];
+    }
+
+    function saveArchivedIds(ids) {
+      try { localStorage.setItem(ARCHIVE_KEY, JSON.stringify(ids)); } catch {}
+    }
+
+    function isAdminSessionValid() {
+      try {
+        const ts = localStorage.getItem(ADMIN_KEY);
+        if (!ts) return false;
+        return Date.now() - parseInt(ts, 10) < ADMIN_TTL_MS;
+      } catch { return false; }
+    }
+
+    function stampAdminSession() {
+      try { localStorage.setItem(ADMIN_KEY, String(Date.now())); } catch {}
+    }
+
+    function clearAdminSession() {
+      try { localStorage.removeItem(ADMIN_KEY); } catch {}
+    }
+
+    // Simple markdown renderer: **bold**, _italic_, lines starting with "- " → bullets
+    function renderMarkdown(text) {
+      if (!text) return null;
+      const lines = text.split("\n");
+      const elements = [];
+      let bulletGroup = [];
+
+      const flushBullets = () => {
+        if (bulletGroup.length) {
+          elements.push(
+            <ul key={elements.length} style={{ margin: "0 0 12px 20px", padding: 0 }}>
+              {bulletGroup.map((b, i) => <li key={i} style={{ marginBottom: 4 }}>{inlineFormat(b)}</li>)}
+            </ul>
+          );
+          bulletGroup = [];
+        }
+      };
+
+      const inlineFormat = (str) => {
+        const parts = [];
+        const regex = /(\*\*(.+?)\*\*|_(.+?)_)/g;
+        let last = 0, match;
+        while ((match = regex.exec(str)) !== null) {
+          if (match.index > last) parts.push(str.slice(last, match.index));
+          if (match[2] !== undefined) parts.push(<strong key={match.index}>{match[2]}</strong>);
+          else if (match[3] !== undefined) parts.push(<em key={match.index}>{match[3]}</em>);
+          last = match.index + match[0].length;
+        }
+        if (last < str.length) parts.push(str.slice(last));
+        return parts.length ? parts : str;
+      };
+
+      lines.forEach((line, i) => {
+        if (line.startsWith("- ")) {
+          bulletGroup.push(line.slice(2));
+        } else {
+          flushBullets();
+          if (line.trim() === "") {
+            elements.push(<br key={i} />);
+          } else {
+            elements.push(<p key={i} style={{ margin: "0 0 10px" }}>{inlineFormat(line)}</p>);
+          }
+        }
+      });
+      flushBullets();
+      return elements;
+    }
+
+    // -------------------------------------------------------------------------
+    // SHARED STYLE FRAGMENTS
+    // -------------------------------------------------------------------------
+    const inputStyle = {
+      width: "100%", background: C.cream,
+      border: `1.5px solid ${C.border}`, borderRadius: 10,
+      padding: "9px 12px", fontSize: 13, outline: "none",
+      color: C.black, boxSizing: "border-box", fontFamily: "inherit",
+    };
+
+    const labelStyle = {
+      fontSize: 11, fontWeight: 700, color: C.gray,
+      display: "block", marginBottom: 4,
+      textTransform: "uppercase", letterSpacing: "0.05em",
+    };
+
+    // -------------------------------------------------------------------------
+    // ROOT COMPONENT
+    // -------------------------------------------------------------------------
+    function OdekoNotificationCenter() {
+      const [articles, setArticles]         = useState(SEED_ARTICLES);
+      const [readIds, setReadIds]           = useState(new Set());
+      const [unreadIds, setUnreadIds]       = useState([]);
+      const [filter, setFilter]             = useState("all");
+      const [selectedId, setSelectedId]     = useState(null);
+
+      const [archivedIds, setArchivedIds]       = useState([]);
+      const [adminOpen, setAdminOpen]           = useState(false);
+      const [adminUnlocked, setAdminUnlocked]   = useState(() => isAdminSessionValid());
+      const [passwordInput, setPasswordInput]   = useState("");
+      const [passwordError, setPasswordError]   = useState(false);
+      const [editingId, setEditingId]           = useState(null);
+      const [form, setForm]                     = useState(emptyForm());
+      const [saveStatus, setSaveStatus]         = useState("");
+      const [previewOpen, setPreviewOpen]       = useState(false);
+
+      const passwordRef = useRef(null);
+      const contentRef  = useRef(null);
+
+      const insertFormat = (prefix, suffix = prefix) => {
+        const el = contentRef.current;
+        if (!el) return;
+        const { selectionStart: s, selectionEnd: e, value } = el;
+        const selected = value.slice(s, e);
+        const replacement = `${prefix}${selected || "text"}${suffix}`;
+        const next = value.slice(0, s) + replacement + value.slice(e);
+        handleFormChange("preview", next);
+        setTimeout(() => {
+          el.focus();
+          el.setSelectionRange(s + prefix.length, s + prefix.length + (selected || "text").length);
+        }, 0);
+      };
+
+      const insertBullet = () => {
+        const el = contentRef.current;
+        if (!el) return;
+        const { selectionStart: s, value } = el;
+        const lineStart = value.lastIndexOf("\n", s - 1) + 1;
+        const next = value.slice(0, lineStart) + "- " + value.slice(lineStart);
+        handleFormChange("preview", next);
+        setTimeout(() => { el.focus(); el.setSelectionRange(s + 2, s + 2); }, 0);
+      };
+
+      // Load from storage on mount
+      useEffect(() => {
+        const saved = loadArticles();
+        if (saved) {
+          setArticles(saved);
+          setUnreadIds(saved.filter((a) => a.unread).map((a) => a.id));
+        } else {
+          setUnreadIds(SEED_ARTICLES.filter((a) => a.unread).map((a) => a.id));
+        }
+        setArchivedIds(loadArchivedIds());
+      }, []);
+
+      useEffect(() => {
+        if (adminOpen && !adminUnlocked) passwordRef.current?.focus();
+      }, [adminOpen, adminUnlocked]);
+
+      // Auto-select first article when switching tabs
+      useEffect(() => {
+        const visible = (() => {
+          if (filter === "archived") return articles.filter(a => archivedIds.includes(a.id));
+          const active = articles.filter(a => !archivedIds.includes(a.id));
+          return filter === "all" ? active : active.filter(a => a.type === filter);
+        })();
+        if (visible.length > 0 && !visible.find(a => a.id === selectedId)) {
+          setSelectedId(visible[0].id);
+          setReadIds(prev => new Set([...prev, visible[0].id]));
+          setUnreadIds(prev => prev.filter(i => i !== visible[0].id));
+        }
+      }, [filter, articles.length]);
+
+      // -----------------------------------------------------------------------
+      // DERIVED
+      // -----------------------------------------------------------------------
+      const unreadCount = unreadIds.length;
+
+      const visibleArticles = (() => {
+        if (filter === "archived") return articles.filter((a) => archivedIds.includes(a.id));
+        const active = articles.filter((a) => !archivedIds.includes(a.id));
+        if (filter === "unread")   return active.filter((a) => unreadIds.includes(a.id));
+        if (filter === "all")      return active;
+        return active.filter((a) => a.type === filter);
+      })();
+
+      const allCaughtUp = articles.length > 0 && articles.every((a) => readIds.has(a.id));
+
+      // -----------------------------------------------------------------------
+      // ADMIN HANDLERS
+      // -----------------------------------------------------------------------
+      const handleAdminToggle = () => {
+        if (adminOpen) {
+          setAdminOpen(false);
+          setPasswordInput(""); setPasswordError(false);
+        } else {
+          setAdminOpen(true);
+        }
+      };
+
+      const handleAdminLock = () => {
+        clearAdminSession();
+        setAdminUnlocked(false); setAdminOpen(false);
+        setPasswordInput(""); setPasswordError(false);
+      };
+
+      const handlePasswordSubmit = () => {
+        if (passwordInput === ADMIN_PASSWORD) {
+          stampAdminSession();
+          setAdminUnlocked(true); setPasswordError(false); setPasswordInput("");
+        } else {
+          setPasswordError(true); setPasswordInput("");
+        }
+      };
+
+      const handleFormChange = (key, value) =>
+        setForm((prev) => ({ ...prev, [key]: value }));
+
+      const handleToggleFC = (fc) =>
+        setForm((prev) => ({
+          ...prev,
+          fulfillmentCenters: prev.fulfillmentCenters.includes(fc)
+            ? prev.fulfillmentCenters.filter((f) => f !== fc)
+            : [...prev.fulfillmentCenters, fc],
+        }));
+
+      const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => handleFormChange("imageUrl", ev.target.result);
+        reader.readAsDataURL(file);
+      };
+
+      const handleSaveArticle = () => {
+        if (!form.title.trim() || !form.preview.trim()) return;
+        const typeInfo = CONTENT_TYPES.find((t) => t.value === form.type);
+        let updated;
+        if (editingId !== null) {
+          updated = articles.map((a) =>
+            a.id === editingId ? { ...a, ...form, badge: typeInfo.badge } : a
+          );
+        } else {
+          const newArticle = { id: Date.now(), ...form, badge: typeInfo.badge };
+          updated = [newArticle, ...articles];
+          if (form.unread) setUnreadIds((prev) => [newArticle.id, ...prev]);
+        }
+        setArticles(updated);
+        setForm(emptyForm()); setEditingId(null);
+        saveArticles(updated);
+        setSaveStatus("Saved ✓");
+        setTimeout(() => setSaveStatus(""), 2000);
+      };
+
+      const handleEditArticle = (article) => {
+        setForm({
+          type: article.type, title: article.title, preview: article.preview,
+          date: article.date, unread: article.unread,
+          ctaLabel: article.ctaLabel ?? "", ctaUrl: article.ctaUrl ?? "",
+          fulfillmentCenters: article.fulfillmentCenters ?? [],
+          imageUrl: article.imageUrl ?? "",
+        });
+        setEditingId(article.id);
+      };
+
+      const handleDeleteArticle = (id) => {
+        const updated = articles.filter((a) => a.id !== id);
+        setArticles(updated);
+        setUnreadIds((prev) => prev.filter((i) => i !== id));
+        if (editingId === id) { setEditingId(null); setForm(emptyForm()); }
+        saveArticles(updated);
+      };
+
+      // -----------------------------------------------------------------------
+      // FEED HANDLERS
+      // -----------------------------------------------------------------------
+      const handleSelect = (id) => {
+        setSelectedId(id);
+        // auto-mark as read on open
+        setReadIds((prev) => new Set([...prev, id]));
+        setUnreadIds((prev) => prev.filter((i) => i !== id));
+      };
+      const handleMarkRead = (e, id) => {
+        e.stopPropagation();
+        setReadIds((prev) => new Set([...prev, id]));
+        setUnreadIds((prev) => prev.filter((i) => i !== id));
+      };
+
+      const handleArchive = (e, id) => {
+        e.stopPropagation();
+        setArchivedIds((prev) => {
+          const next = [...prev, id];
+          saveArchivedIds(next);
+          return next;
+        });
+        setUnreadIds((prev) => prev.filter((i) => i !== id));
+        if (selectedId === id) setSelectedId(null);
+      };
+
+      const handleUnarchive = (e, id) => {
+        e.stopPropagation();
+        setArchivedIds((prev) => {
+          const next = prev.filter((i) => i !== id);
+          saveArchivedIds(next);
+          return next;
+        });
+      };
+
+      // -----------------------------------------------------------------------
+      // RENDER
+      // -----------------------------------------------------------------------
+      return (
+        <div style={{ fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif", background: C.cream, minHeight: "100vh" }}>
+
+          {/* ── HEADER ──────────────────────────────────────────────────── */}
+          <div style={{ background: C.yellow, padding: "28px 24px 0", borderBottom: `3px solid ${C.yellowDark}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+                  <img src="Odeko_Wordmark_RGB_Mocha.svg" alt="Odeko" style={{ height: 48, display: "block" }} />
+                  <span style={{ width: 1, height: 18, background: "rgba(0,0,0,0.2)" }} />
+                  <span style={{ fontSize: 15, color: C.dark, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                    Notification Center
+                  </span>
+                </div>
+                <h1 style={{ color: C.black, margin: "0 0 4px", fontSize: 22, fontWeight: 700, lineHeight: 1.2 }}>
+                  Welcome back, {SHOP_NAME} ☕
+                </h1>
+                <p style={{ color: C.dark, margin: 0, fontSize: 14, opacity: 0.7 }}>
+                  Here's what's new.
+                </p>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <button
+                  onClick={handleAdminToggle}
+                  style={{
+                    background: adminOpen ? C.black : "rgba(0,0,0,0.12)",
+                    color: adminOpen ? C.yellow : C.black,
+                    border: "none", borderRadius: 20, padding: "7px 14px",
+                    fontSize: 13, fontWeight: 700, cursor: "pointer",
+                  }}
+                >
+                  ⚙ Admin
+                </button>
+              </div>
+            </div>
+
+            {/* Filter tabs */}
+            <div style={{ display: "flex", gap: 4 }}>
+              {FILTER_TABS.map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setFilter(tab.key)}
+                  style={{
+                    background: filter === tab.key ? C.black : "transparent",
+                    color: filter === tab.key ? C.yellow : C.black,
+                    border: "none", borderRadius: "10px 10px 0 0",
+                    padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ── ADMIN PANEL ─────────────────────────────────────────────── */}
+          {adminOpen && (
+            <div style={{ background: C.white, borderBottom: `2px solid ${C.border}`, padding: "24px 20px" }}>
+              {!adminUnlocked ? (
+                <div style={{ maxWidth: 320, margin: "0 auto", textAlign: "center" }}>
+                  <div style={{ fontSize: 32, marginBottom: 10 }}>🔒</div>
+                  <h2 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 700, color: C.black }}>Admin Access</h2>
+                  <p style={{ margin: "0 0 16px", fontSize: 13, color: C.gray }}>Enter the admin password to manage articles.</p>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      ref={passwordRef}
+                      type="password"
+                      value={passwordInput}
+                      onChange={(e) => { setPasswordInput(e.target.value); setPasswordError(false); }}
+                      onKeyDown={(e) => e.key === "Enter" && handlePasswordSubmit()}
+                      placeholder="Password"
+                      style={{ ...inputStyle, textAlign: "center", letterSpacing: "0.1em", borderColor: passwordError ? C.red : C.border }}
+                    />
+                    <button
+                      onClick={handlePasswordSubmit}
+                      style={{ background: C.yellow, border: "none", borderRadius: 10, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", color: C.black, whiteSpace: "nowrap" }}
+                    >
+                      Unlock
+                    </button>
+                  </div>
+                  {passwordError && (
+                    <p style={{ margin: "8px 0 0", fontSize: 12, color: C.red, fontWeight: 600 }}>Incorrect password. Try again.</p>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                    <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: C.black }}>
+                      {editingId !== null ? "✏️ Edit Article" : "➕ Add New Article"}
+                    </h2>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      {saveStatus && <span style={{ fontSize: 13, color: C.green, fontWeight: 600 }}>{saveStatus}</span>}
+                      <button
+                        onClick={handleAdminLock}
+                        style={{ background: "transparent", border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "5px 12px", fontSize: 12, cursor: "pointer", color: C.gray, fontWeight: 600 }}
+                      >
+                        🔒 Lock
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <div>
+                        <label style={labelStyle}>Type</label>
+                        <select value={form.type} onChange={(e) => handleFormChange("type", e.target.value)} style={inputStyle}>
+                          {CONTENT_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={labelStyle}>Date</label>
+                        <input type="text" value={form.date} onChange={(e) => handleFormChange("date", e.target.value)} style={inputStyle} placeholder="e.g. May 14, 2026" />
+                      </div>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Title</label>
+                      <input type="text" value={form.title} onChange={(e) => handleFormChange("title", e.target.value)} style={inputStyle} placeholder="Article headline…" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Content</label>
+                      <div style={{ border: `1.5px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.cream }}>
+                        <div style={{ display: "flex", gap: 6, padding: "10px 12px", background: C.white, borderBottom: `1px solid ${C.border}` }}>
+                          {[
+                            { label: "Bold", title: "Bold", style: { fontWeight: 800 }, action: () => insertFormat("**") },
+                            { label: "Italic", title: "Italic", style: { fontStyle: "italic" }, action: () => insertFormat("_") },
+                            { label: "• Bullet", title: "Bullet list", style: {}, action: insertBullet },
+                          ].map(({ label, title, style, action }) => (
+                            <button key={label} type="button" title={title} onClick={action} style={{
+                              background: C.cream, border: `1.5px solid ${C.border}`, borderRadius: 8,
+                              padding: "5px 14px", fontSize: 13, color: C.mocha,
+                              cursor: "pointer", fontFamily: "inherit", ...style,
+                            }}>{label}</button>
+                          ))}
+                        </div>
+                        <textarea
+                          ref={contentRef}
+                          value={form.preview}
+                          onChange={(e) => handleFormChange("preview", e.target.value)}
+                          style={{ ...inputStyle, border: "none", borderRadius: 0, resize: "vertical", minHeight: 220, background: C.cream, lineHeight: 1.7 }}
+                          placeholder="Article body text…"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Image (optional)</label>
+                      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                        <label style={{
+                          display: "inline-flex", alignItems: "center", gap: 8,
+                          background: C.white, border: `1.5px solid ${C.border}`,
+                          borderRadius: 10, padding: "9px 14px", fontSize: 13,
+                          fontWeight: 600, color: C.dark, cursor: "pointer",
+                        }}>
+                          📎 {form.imageUrl ? "Replace image" : "Upload image"}
+                          <input type="file" accept="image/*" onChange={handleImageUpload} style={{ display: "none" }} />
+                        </label>
+                        {form.imageUrl && (
+                          <div style={{ position: "relative", display: "inline-block" }}>
+                            <img src={form.imageUrl} alt="preview" style={{ height: 60, borderRadius: 8, border: `1.5px solid ${C.border}`, objectFit: "cover", maxWidth: 120 }} />
+                            <button
+                              type="button"
+                              onClick={() => handleFormChange("imageUrl", "")}
+                              style={{ position: "absolute", top: -6, right: -6, background: C.red, color: C.white, border: "none", borderRadius: "50%", width: 18, height: 18, fontSize: 11, fontWeight: 700, cursor: "pointer", lineHeight: "18px", padding: 0, textAlign: "center" }}
+                            >✕</button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <div>
+                        <label style={labelStyle}>CTA Button Label</label>
+                        <input type="text" value={form.ctaLabel} onChange={(e) => handleFormChange("ctaLabel", e.target.value)} style={inputStyle} placeholder="e.g. Shop Now" />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>CTA URL</label>
+                        <input type="text" value={form.ctaUrl} onChange={(e) => handleFormChange("ctaUrl", e.target.value)} style={inputStyle} placeholder="https://…" />
+                      </div>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>
+                        Fulfillment Centers
+                        <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, marginLeft: 6, color: C.gray }}>
+                          ({form.fulfillmentCenters.length === 0 ? "All centers" : `${form.fulfillmentCenters.length} selected`})
+                        </span>
+                      </label>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "10px 12px", background: C.cream, border: `1.5px solid ${C.border}`, borderRadius: 10 }}>
+                        {FULFILLMENT_CENTERS.map((fc) => {
+                          const active = form.fulfillmentCenters.includes(fc);
+                          return (
+                            <button
+                              key={fc}
+                              type="button"
+                              onClick={() => handleToggleFC(fc)}
+                              style={{
+                                background: active ? C.mocha : C.white,
+                                color: active ? C.gold : C.dark,
+                                border: `1.5px solid ${active ? C.mocha : C.border}`,
+                                borderRadius: 6, padding: "4px 10px",
+                                fontSize: 12, fontWeight: 600, cursor: "pointer",
+                                fontFamily: "inherit",
+                              }}
+                            >
+                              {fc}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {form.fulfillmentCenters.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleFormChange("fulfillmentCenters", [])}
+                          style={{ marginTop: 6, background: "none", border: "none", padding: 0, fontSize: 11, color: C.gray, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}
+                        >
+                          Clear selection (send to all)
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input type="checkbox" id="unread" checked={form.unread} onChange={(e) => handleFormChange("unread", e.target.checked)} style={{ accentColor: C.black, width: 16, height: 16 }} />
+                      <label htmlFor="unread" style={{ fontSize: 13, color: C.dark, fontWeight: 500 }}>Mark as unread</label>
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        onClick={handleSaveArticle}
+                        disabled={!form.title.trim() || !form.preview.trim()}
+                        style={{ background: C.yellow, border: "none", borderRadius: 10, padding: "10px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer", color: C.black, opacity: !form.title.trim() || !form.preview.trim() ? 0.4 : 1 }}
+                      >
+                        {editingId !== null ? "Save Changes" : "Publish Article"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPreviewOpen(true)}
+                        disabled={!form.title.trim() && !form.preview.trim()}
+                        style={{ background: "transparent", border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", color: C.dark, opacity: !form.title.trim() && !form.preview.trim() ? 0.4 : 1 }}
+                      >
+                        👁 Preview
+                      </button>
+                      {editingId !== null && (
+                        <button
+                          onClick={() => { setEditingId(null); setForm(emptyForm()); }}
+                          style={{ background: "transparent", border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "10px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", color: C.gray }}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Article list */}
+                  <div style={{ marginTop: 20 }}>
+                    <p style={{ fontSize: 11, fontWeight: 700, color: C.gray, textTransform: "uppercase", letterSpacing: "0.05em", margin: "0 0 10px" }}>
+                      All Articles ({articles.length})
+                    </p>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {articles.map((article) => {
+                        const bs = BADGE_STYLES[article.type];
+                        return (
+                          <div
+                            key={article.id}
+                            style={{
+                              display: "flex", alignItems: "center", gap: 10,
+                              background: editingId === article.id ? C.creamDark : C.cream,
+                              borderRadius: 10, padding: "10px 14px",
+                              border: `1.5px solid ${editingId === article.id ? C.yellowDark : C.border}`,
+                            }}
+                          >
+                            <span style={{ background: bs.bg, color: bs.text, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, textTransform: "uppercase", letterSpacing: "0.04em", border: bs.border, whiteSpace: "nowrap" }}>{article.badge}</span>
+                            <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: C.black, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{article.title}</span>
+                            <span style={{ fontSize: 12, color: C.gray, whiteSpace: "nowrap" }}>{article.date}</span>
+                            <button onClick={() => handleEditArticle(article)} style={{ background: "transparent", border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "4px 10px", fontSize: 12, cursor: "pointer", color: C.dark, fontWeight: 600 }}>Edit</button>
+                            <button onClick={() => handleDeleteArticle(article.id)} style={{ background: "transparent", border: "1.5px solid #FFCDD2", borderRadius: 8, padding: "4px 10px", fontSize: 12, cursor: "pointer", color: C.red, fontWeight: 600 }}>Delete</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── TWO-PANEL LAYOUT ────────────────────────────────────────── */}
+          <div style={{ display: "flex", height: "calc(100vh - 220px)", minHeight: 400 }}>
+
+            {/* ── FULL-SCREEN EMPTY STATE ───────────────────────────────── */}
+            {visibleArticles.length === 0 && (
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: C.white, textAlign: "center", padding: 40 }}>
+                <div style={{ position: "relative", width: 100, height: 110, marginBottom: 28 }}>
+                  <svg className="steam1" style={{ position: "absolute", left: 18, top: -12, width: 14, height: 44 }} viewBox="0 0 12 36">
+                    <path d="M6 36 Q0 27 6 18 Q12 9 6 0" fill="none" stroke="#C9A600" strokeWidth="2.5" strokeLinecap="round"/>
+                  </svg>
+                  <svg className="steam2" style={{ position: "absolute", left: 42, top: -18, width: 14, height: 44 }} viewBox="0 0 12 36">
+                    <path d="M6 36 Q12 27 6 18 Q0 9 6 0" fill="none" stroke="#C9A600" strokeWidth="2.5" strokeLinecap="round"/>
+                  </svg>
+                  <svg className="steam3" style={{ position: "absolute", left: 66, top: -10, width: 14, height: 44 }} viewBox="0 0 12 36">
+                    <path d="M6 36 Q0 27 6 18 Q12 9 6 0" fill="none" stroke="#C9A600" strokeWidth="2.5" strokeLinecap="round"/>
+                  </svg>
+                  <svg style={{ position: "absolute", bottom: 0, left: 0, width: 100, height: 86 }} viewBox="0 0 80 70">
+                    <path d="M8 10 L14 62 Q14 66 18 66 L62 66 Q66 66 66 62 L72 10 Z" fill="#40180B"/>
+                    <ellipse cx="40" cy="12" rx="32" ry="6" fill="#6B3828"/>
+                    <ellipse cx="40" cy="12" rx="28" ry="4" fill="#8B4C32"/>
+                    <path d="M66 28 Q82 28 82 40 Q82 54 66 54" fill="none" stroke="#40180B" strokeWidth="5" strokeLinecap="round"/>
+                    <ellipse cx="40" cy="67" rx="36" ry="4" fill="#C9A600"/>
+                  </svg>
+                </div>
+                <p style={{ fontSize: 20, fontWeight: 800, color: C.mocha, margin: "0 0 10px" }}>Nothing brewing here.</p>
+                <p style={{ fontSize: 14, margin: 0, color: C.gray }}>
+                  {filter === "archived" ? "You haven't archived anything yet." : "You're all caught up. Check back soon."}
+                </p>
+              </div>
+            )}
+
+            {/* ── LEFT: Notification list ───────────────────────────────── */}
+            {visibleArticles.length > 0 && (
+            <div style={{
+              width: 420, flexShrink: 0,
+              borderRight: `2px solid ${C.border}`,
+              overflowY: "auto",
+              background: C.ecru,
+            }}>
+              {visibleArticles.map((article) => {
+                const isUnread   = unreadIds.includes(article.id);
+                const isSelected = selectedId === article.id;
+                const bs         = BADGE_STYLES[article.type];
+
+                return (
+                  <div
+                    key={article.id}
+                    onClick={() => handleSelect(article.id)}
+                    style={{
+                      padding: "14px 16px",
+                      borderBottom: `1px solid ${C.border}`,
+                      cursor: "pointer",
+                      background: isSelected ? C.gold : isUnread ? C.white : "transparent",
+                      borderLeft: isUnread && !isSelected ? `4px solid ${C.gold}` : "4px solid transparent",
+                      transition: "background 0.12s",
+                      position: "relative",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5 }}>
+                      <span style={{
+                        background: bs.bg, color: bs.text, fontSize: 10, fontWeight: 700,
+                        padding: "2px 8px", borderRadius: 20, textTransform: "uppercase",
+                        letterSpacing: "0.04em", border: bs.border, whiteSpace: "nowrap",
+                      }}>{article.badge}</span>
+                      {isUnread && !isSelected && (
+                        <span style={{
+                          width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+                          background: C.gold, border: `1.5px solid ${C.goldDark}`,
+                          display: "inline-block",
+                        }} />
+                      )}
+                      <span style={{ marginLeft: "auto", fontSize: 11, color: isSelected ? C.mocha : C.gray, whiteSpace: "nowrap" }}>{article.date}</span>
+                    </div>
+                    <p style={{
+                      margin: 0, fontSize: 13,
+                      fontWeight: isUnread ? 700 : 500,
+                      color: isSelected ? C.mocha : C.mocha,
+                      lineHeight: 1.3, marginBottom: 4,
+                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                    }}>{article.title}</p>
+                    <p style={{
+                      margin: 0, fontSize: 12,
+                      color: isSelected ? C.mochaMid : C.gray,
+                      lineHeight: 1.4,
+                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                      opacity: 0.8,
+                    }}>{article.preview}</p>
+                    {filter === "archived" && (
+                      <button
+                        onClick={(e) => handleUnarchive(e, article.id)}
+                        style={{ marginTop: 6, background: "none", border: "none", padding: 0, fontSize: 11, color: C.gray, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}
+                      >
+                        Move back to inbox
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            )}
+
+            {/* ── RIGHT: Selected article ───────────────────────────────── */}
+            {visibleArticles.length > 0 && (
+            <div style={{ flex: 1, overflowY: "auto", background: C.white }}>
+              {!selectedId || !articles.find(a => a.id === selectedId) ? (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: C.gray, textAlign: "center", padding: 40 }}>
+                  <p style={{ fontSize: 16, fontWeight: 700, color: C.mocha, margin: "0 0 8px" }}>Pick a notification.</p>
+                  <p style={{ fontSize: 13, margin: 0 }}>Select one on the left to read it here.</p>
+                </div>
+              ) : (() => {
+                const article = articles.find(a => a.id === selectedId);
+                const bs = BADGE_STYLES[article.type];
+                return (
+                  <div style={{ padding: "36px 40px", maxWidth: 640 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+                      <span style={{ background: bs.bg, color: bs.text, fontSize: 12, fontWeight: 700, padding: "4px 12px", borderRadius: 20, textTransform: "uppercase", letterSpacing: "0.05em", border: bs.border }}>{article.badge}</span>
+                      <span style={{ fontSize: 13, color: C.gray }}>{article.date}</span>
+                    </div>
+                    <h2 style={{ margin: "0 0 12px", fontSize: 18, fontWeight: 800, color: C.mocha, lineHeight: 1.3 }}>{article.title}</h2>
+                    {article.imageUrl && (
+                      <img src={article.imageUrl} alt="" style={{ width: "100%", maxHeight: 280, objectFit: "cover", borderRadius: 12, marginBottom: 20, border: `1.5px solid ${C.border}` }} />
+                    )}
+                    <div style={{ margin: "0 0 24px", fontSize: 14, color: C.mochaMid, lineHeight: 1.7 }}>{renderMarkdown(article.preview)}</div>
+                    {article.ctaLabel && article.ctaUrl && (
+                      <a
+                        href={article.ctaUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ display: "inline-block", background: C.gold, color: C.mocha, fontWeight: 700, fontSize: 14, padding: "10px 24px", borderRadius: 24, textDecoration: "none", border: `2px solid ${C.goldDark}` }}
+                      >
+                        {article.ctaLabel} →
+                      </a>
+                    )}
+                    <div style={{ marginTop: 32, paddingTop: 24, borderTop: `1px solid ${C.border}` }}>
+                      {archivedIds.includes(article.id) ? (
+                        <button
+                          onClick={(e) => handleUnarchive(e, article.id)}
+                          style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: C.gray, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}
+                        >
+                          Move back to inbox
+                        </button>
+                      ) : (
+                        <button
+                          onClick={(e) => handleArchive(e, article.id)}
+                          style={{ background: "none", border: "none", padding: 0, fontSize: 13, color: C.gray, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}
+                        >
+                          Archive
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+            )}
+
+          </div>
+
+          {/* ── ARTICLE PREVIEW MODAL ───────────────────────────────────── */}
+          {previewOpen && (() => {
+            const typeInfo = CONTENT_TYPES.find(t => t.value === form.type);
+            const bs = BADGE_STYLES[form.type];
+            return (
+              <div
+                onClick={() => setPreviewOpen(false)}
+                style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+              >
+                <div
+                  onClick={e => e.stopPropagation()}
+                  style={{ background: C.white, borderRadius: 16, width: "100%", maxWidth: 620, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}
+                >
+                  {/* Modal header */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 24px", borderBottom: `1px solid ${C.border}` }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: C.gray, textTransform: "uppercase", letterSpacing: "0.05em" }}>Article Preview</span>
+                    <button onClick={() => setPreviewOpen(false)} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: C.gray, lineHeight: 1, padding: 0 }}>✕</button>
+                  </div>
+                  {/* Article content */}
+                  <div style={{ padding: "32px 36px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+                      <span style={{ background: bs.bg, color: bs.text, fontSize: 12, fontWeight: 700, padding: "4px 12px", borderRadius: 20, textTransform: "uppercase", letterSpacing: "0.05em", border: bs.border }}>
+                        {typeInfo?.badge}
+                      </span>
+                      <span style={{ fontSize: 13, color: C.gray }}>{form.date}</span>
+                    </div>
+                    <h2 style={{ margin: "0 0 12px", fontSize: 18, fontWeight: 800, color: C.mocha, lineHeight: 1.3 }}>
+                      {form.title || <span style={{ color: C.gray, fontStyle: "italic" }}>No title yet</span>}
+                    </h2>
+                    {form.imageUrl && (
+                      <img src={form.imageUrl} alt="" style={{ width: "100%", maxHeight: 260, objectFit: "cover", borderRadius: 12, marginBottom: 20, border: `1.5px solid ${C.border}` }} />
+                    )}
+                    <div style={{ fontSize: 14, color: C.mochaMid, lineHeight: 1.7, marginBottom: 24 }}>
+                      {form.preview ? renderMarkdown(form.preview) : <span style={{ color: C.gray, fontStyle: "italic" }}>No content yet</span>}
+                    </div>
+                    {form.ctaLabel && (
+                      <span style={{ display: "inline-block", background: C.gold, color: C.mocha, fontWeight: 700, fontSize: 14, padding: "10px 24px", borderRadius: 24, border: `2px solid ${C.goldDark}` }}>
+                        {form.ctaLabel} →
+                      </span>
+                    )}
+                    {form.fulfillmentCenters.length > 0 && (
+                      <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${C.border}` }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: C.gray, textTransform: "uppercase", letterSpacing: "0.05em" }}>Sending to: </span>
+                        <span style={{ fontSize: 12, color: C.dark }}>{form.fulfillmentCenters.join(", ")}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ padding: "16px 24px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                    <button onClick={() => setPreviewOpen(false)} style={{ background: "transparent", border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", color: C.gray }}>
+                      Back to editing
+                    </button>
+                    <button
+                      onClick={() => { setPreviewOpen(false); handleSaveArticle(); }}
+                      disabled={!form.title.trim() || !form.preview.trim()}
+                      style={{ background: C.yellow, border: "none", borderRadius: 10, padding: "9px 22px", fontSize: 13, fontWeight: 700, cursor: "pointer", color: C.black, opacity: !form.title.trim() || !form.preview.trim() ? 0.4 : 1 }}
+                    >
+                      {editingId !== null ? "Save Changes" : "Publish Article"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+        </div>
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // MOUNT
+    // -------------------------------------------------------------------------
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<OdekoNotificationCenter />);
+  </script>
+</body>
+</html>
