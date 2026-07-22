@@ -58,6 +58,18 @@
     const ARCHIVE_KEY    = "odeko-archived-ids";
     const ADMIN_KEY      = "odeko-admin-unlock-ts";
     const ADMIN_TTL_MS   = 60 * 60 * 1000; // 1 hour
+    const DATA_VERSION   = "v2"; // bump this to reset all users' localStorage
+
+    // Clear stale data if version changed
+    (function() {
+      try {
+        if (localStorage.getItem("odeko-data-version") !== DATA_VERSION) {
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem(ARCHIVE_KEY);
+          localStorage.setItem("odeko-data-version", DATA_VERSION);
+        }
+      } catch {}
+    })();
 
     // -------------------------------------------------------------------------
     // BRAND TOKENS
